@@ -1,0 +1,54 @@
+{
+  "title": "Cloud-Native AI Inference & Drift Overview",
+  "uid": "mlops-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Model Loaded",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "mlops_model_loaded", "refId": "A" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Drift Alert Active",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "mlops_drift_alert_active", "refId": "A" }]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Inference Request Rate (RPS)",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum by (label) (rate(mlops_inference_requests_total[1m]))", "refId": "A" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "p95 Inference Latency (ms)",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(mlops_inference_latency_seconds_bucket[1m])) by (le)) * 1000",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Population Stability Index (Input & Prediction Drift)",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+      "targets": [
+        { "expr": "mlops_input_length_psi", "legendFormat": "Input Length PSI", "refId": "A" },
+        { "expr": "mlops_prediction_prob_psi", "legendFormat": "Prediction Prob PSI", "refId": "B" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mlops-postgres
+    environment:
+      POSTGRES_USER: mlops
+      POSTGRES_PASSWORD: mlops_dev_password
+      POSTGRES_DB: mlops_predictions
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlops -d mlops_predictions"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    mem_limit: 256m
+    networks:
+      - mlops-net
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cloud-native-ai-mlops:local
+    container_name: mlops-api
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://mlops:mlops_dev_password@postgres:5432/mlops_predictions}
+      MODEL_PATH: artifacts/model_int8.onnx
+      TOKENIZER_PATH: artifacts/tokenizer.json
+      BASELINE_STATS_PATH: artifacts/baseline_stats.json
+      DRIFT_WINDOW_SIZE: 100
+      DRIFT_PSI_THRESHOLD: 0.25
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 384m
+    networks:
+      - mlops-net
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: mlops-prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+    mem_limit: 192m
+    networks:
+      - mlops-net
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: mlops-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin_dev_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    mem_limit: 256m
+    networks:
+      - mlops-net
+
+networks:
+  mlops-net:
+    driver: bridge
