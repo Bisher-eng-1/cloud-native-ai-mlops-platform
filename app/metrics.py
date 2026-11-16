@@ -9,7 +9,6 @@ from prometheus_client import (
 
 
 class MLOpsMetrics:
-    """Prometheus instrumentation for inference latency, predictions, and drift."""
 
     def __init__(self) -> None:
         self.registry = CollectorRegistry()

@@ -29,7 +29,6 @@ def _softmax(logits: np.ndarray) -> np.ndarray:
 
 
 class ONNXInferenceEngine:
-    """Thread-safe CPU ONNX Runtime inference engine with zero PyTorch runtime dependency."""
 
     def __init__(self, model_path: Path, tokenizer_path: Path) -> None:
         if not model_path.exists():

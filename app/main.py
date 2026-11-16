@@ -10,14 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import Settings, get_settings
 from app.db import DatabaseManager
-from app.drift import DriftDetector
+from app.drift import DriftDetector, DriftWindow
 from app.inference import ONNXInferenceEngine
 from app.logging_utils import configure_json_logger
 from app.metrics import MLOpsMetrics
 
 
 class PredictRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=4096, description="Log or operational event message")
+    text: str = Field(..., min_length=1, max_length=4096)
 
 
 class BatchPredictRequest(BaseModel):
@@ -26,6 +26,7 @@ class BatchPredictRequest(BaseModel):
 
 class PredictionResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
+
     id: int
     label: str
     confidence: float
@@ -53,6 +54,7 @@ class DriftStatusResponse(BaseModel):
 
 class IndexResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
+
     service: str
     model_version: str
     endpoints: list[str]
@@ -60,12 +62,14 @@ class IndexResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
+
     status: str
     model_version: str
 
 
 class ReadyResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
+
     status: str
     model_version: str
     storage_backend: str
@@ -73,6 +77,7 @@ class ReadyResponse(BaseModel):
 
 class HistoryItem(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
+
     id: int
     created_at: str | None
     label: str
@@ -93,6 +98,26 @@ class HistoryResponse(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     cfg = settings or get_settings()
 
+    def _compute_drift(application: FastAPI) -> DriftStatusResponse:
+        lengths, probs, labels = application.state.drift_window.snapshot()
+        report = application.state.drift.evaluate(lengths, probs, labels)
+        application.state.metrics.input_length_psi.set(report.input_length_psi)
+        application.state.metrics.prediction_prob_psi.set(report.prediction_prob_psi)
+        application.state.metrics.drift_alert.set(1 if report.alert else 0)
+        return DriftStatusResponse(
+            sample_count=report.sample_count,
+            min_samples_required=report.min_samples_required,
+            status=report.status,
+            alert=report.alert,
+            psi_threshold=application.state.settings.drift_psi_threshold,
+            input_length_psi=report.input_length_psi,
+            prediction_prob_psi=report.prediction_prob_psi,
+            baseline_mean_length=report.baseline_mean_length,
+            current_mean_length=report.current_mean_length,
+            baseline_anomaly_rate=report.baseline_anomaly_rate,
+            current_anomaly_rate=report.current_anomaly_rate,
+        )
+
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         db = DatabaseManager(cfg.database_url)
@@ -103,6 +128,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             psi_threshold=cfg.drift_psi_threshold,
             min_samples=10,
         )
+        drift_window = DriftWindow(max_size=cfg.drift_window_size)
+        seed_rows = list(reversed(db.recent_predictions(limit=cfg.drift_window_size)))
+        drift_window.seed(
+            [(row.text_length, row.anomaly_probability, row.predicted_label) for row in seed_rows]
+        )
         metrics = MLOpsMetrics()
         metrics.model_loaded.set(1)
 
@@ -110,7 +140,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.state.db = db
         application.state.engine = engine
         application.state.drift = drift_detector
+        application.state.drift_window = drift_window
         application.state.metrics = metrics
+        _compute_drift(application)
+
         try:
             yield
         finally:
@@ -120,7 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title=cfg.app_name,
         version=cfg.model_version,
-        description="ONNX-accelerated NLP inference API with Neon PostgreSQL logging, PSI drift monitoring, and Prometheus metrics.",
+        description="ONNX-accelerated NLP inference API with PostgreSQL logging, PSI drift checks, and Prometheus metrics.",
         lifespan=lifespan,
     )
     logger = configure_json_logger()
@@ -150,30 +183,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             service=cfg.app_name,
             model_version=cfg.model_version,
             endpoints=["/health", "/ready", "/predict", "/predict/batch", "/drift", "/history", "/metrics", "/docs"],
-        )
-
-    def _refresh_drift_metrics() -> DriftStatusResponse:
-        recent = app.state.db.recent_predictions(limit=app.state.settings.drift_window_size)
-        report = app.state.drift.evaluate(
-            lengths=[row.text_length for row in recent],
-            anomaly_probs=[row.anomaly_probability for row in recent],
-            predicted_labels=[row.predicted_label for row in recent],
-        )
-        app.state.metrics.input_length_psi.set(report.input_length_psi)
-        app.state.metrics.prediction_prob_psi.set(report.prediction_prob_psi)
-        app.state.metrics.drift_alert.set(1 if report.alert else 0)
-        return DriftStatusResponse(
-            sample_count=report.sample_count,
-            min_samples_required=report.min_samples_required,
-            status=report.status,
-            alert=report.alert,
-            psi_threshold=app.state.settings.drift_psi_threshold,
-            input_length_psi=report.input_length_psi,
-            prediction_prob_psi=report.prediction_prob_psi,
-            baseline_mean_length=report.baseline_mean_length,
-            current_mean_length=report.current_mean_length,
-            baseline_anomaly_rate=report.baseline_anomaly_rate,
-            current_anomaly_rate=report.current_anomaly_rate,
         )
 
     @app.get("/health", response_model=HealthResponse)
@@ -206,10 +215,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             latency_ms=result.latency_ms,
             model_version=app.state.settings.model_version,
         )
+
         app.state.metrics.requests_total.labels(label=result.label, status="200").inc()
         app.state.metrics.inference_latency_seconds.observe(result.latency_ms / 1000.0)
         app.state.metrics.prediction_confidence.observe(result.confidence)
-        _refresh_drift_metrics()
+        app.state.drift_window.append(len(clean_text), result.incident_probability, result.label)
+        _compute_drift(app)
 
         return PredictionResponse(
             id=record.id,
@@ -246,11 +257,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         records = app.state.db.record_predictions_batch(batch_payloads)
 
         responses: list[PredictionResponse] = []
+        window_entries: list[tuple[int, float, str]] = []
         backend = app.state.db.backend_kind()
-        for record, res in zip(records, results, strict=True):
+        for text_item, record, res in zip(cleaned, records, results, strict=True):
             app.state.metrics.requests_total.labels(label=res.label, status="200").inc()
             app.state.metrics.inference_latency_seconds.observe(res.latency_ms / 1000.0)
             app.state.metrics.prediction_confidence.observe(res.confidence)
+            window_entries.append((len(text_item), res.incident_probability, res.label))
             responses.append(
                 PredictionResponse(
                     id=record.id,
@@ -264,12 +277,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     storage_backend=backend,
                 )
             )
-        _refresh_drift_metrics()
+
+        app.state.drift_window.extend(window_entries)
+        _compute_drift(app)
         return responses
 
     @app.get("/drift", response_model=DriftStatusResponse)
     def drift_status() -> DriftStatusResponse:
-        return _refresh_drift_metrics()
+        return _compute_drift(app)
 
     @app.get("/history", response_model=HistoryResponse)
     def history(limit: int = Query(default=20, ge=1, le=200)) -> HistoryResponse:

@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 
 
 class JsonFormatter(logging.Formatter):
-    """Emit structured single-line JSON logs for container and cloud log aggregators."""
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict = {

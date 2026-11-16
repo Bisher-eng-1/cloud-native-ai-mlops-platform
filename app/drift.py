@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,10 +27,13 @@ class DriftReport:
 
 
 def compute_psi(expected_probs: list[float], observed_values: list[float], bin_edges: list[float]) -> float:
-    """Compute Population Stability Index (PSI) between baseline proportions and current values."""
     if not observed_values:
         return 0.0
-    counts, _ = np.histogram(np.asarray(observed_values, dtype=np.float64), bins=np.asarray(bin_edges, dtype=np.float64))
+    edges = np.asarray(bin_edges, dtype=np.float64).copy()
+    if edges.size >= 2:
+        edges[0] = -np.inf
+        edges[-1] = np.inf
+    counts, _ = np.histogram(np.asarray(observed_values, dtype=np.float64), bins=edges)
     total = float(counts.sum())
     if total <= 0:
         return 0.0
@@ -41,13 +46,38 @@ def compute_psi(expected_probs: list[float], observed_values: list[float], bin_e
     return round(float(psi), 6)
 
 
-class DriftDetector:
-    """Compares recent production inference windows against training baseline histograms."""
+class DriftWindow:
+    def __init__(self, max_size: int) -> None:
+        self._lock = threading.Lock()
+        self._samples: deque[tuple[int, float, str]] = deque(maxlen=max_size)
 
+    def seed(self, samples: list[tuple[int, float, str]]) -> None:
+        with self._lock:
+            self._samples.clear()
+            self._samples.extend(samples)
+
+    def append(self, length: int, anomaly_prob: float, label: str) -> None:
+        with self._lock:
+            self._samples.append((length, anomaly_prob, label))
+
+    def extend(self, samples: list[tuple[int, float, str]]) -> None:
+        with self._lock:
+            self._samples.extend(samples)
+
+    def snapshot(self) -> tuple[list[int], list[float], list[str]]:
+        with self._lock:
+            items = list(self._samples)
+        if not items:
+            return [], [], []
+        lengths, probs, labels = zip(*items, strict=True)
+        return list(lengths), list(probs), list(labels)
+
+
+class DriftDetector:
     def __init__(self, baseline_stats: dict, psi_threshold: float = 0.25, min_samples: int = 10) -> None:
         self.baseline = baseline_stats
         self.psi_threshold = psi_threshold
-        self.min_samples = min_samples
+        self.min_samples = max(1, min_samples)
 
     @classmethod
     def from_file(cls, path: Path, psi_threshold: float = 0.25, min_samples: int = 10) -> DriftDetector:

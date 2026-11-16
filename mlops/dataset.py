@@ -70,7 +70,6 @@ def build_disjoint_dataset(
     train_per_class: int = 360,
     test_per_class: int = 120,
 ) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
-    """Generate deterministic, template-disjoint training and held-out evaluation splits."""
     rng = random.Random(seed)
     train_data = (
         _render_samples(TRAIN_NORMAL_TEMPLATES, 0, train_per_class, rng)

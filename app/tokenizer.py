@@ -12,7 +12,6 @@ UNK_TOKEN = "<unk>"
 
 
 class TextTokenizer:
-    """Lightweight deterministic word/sub-token tokenizer saved as plain JSON."""
 
     def __init__(self, vocab: dict[str, int], max_seq_len: int = 48) -> None:
         self.vocab = vocab

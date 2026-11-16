@@ -5,7 +5,6 @@ import torch.nn as nn
 
 
 class LightweightLogTransformer(nn.Module):
-    """Compact Transformer Encoder classifier designed for fast CPU/ONNX inference."""
 
     def __init__(
         self,

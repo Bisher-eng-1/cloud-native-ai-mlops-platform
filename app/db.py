@@ -33,7 +33,6 @@ class PredictionLog(Base):
 
 
 def normalize_database_url(raw_url: str) -> str:
-    """Normalize Neon/Supabase/Render Postgres URLs for SQLAlchemy + psycopg3."""
     if raw_url.startswith("postgres://"):
         return raw_url.replace("postgres://", "postgresql+psycopg://", 1)
     if raw_url.startswith("postgresql://") and "+psycopg" not in raw_url:
@@ -102,7 +101,6 @@ class DatabaseManager:
         with self.SessionLocal() as db:
             db.add(entry)
             db.commit()
-            db.refresh(entry)
             return entry
 
     def record_predictions_batch(self, items: list[dict]) -> list[PredictionLog]:
@@ -123,8 +121,6 @@ class DatabaseManager:
         with self.SessionLocal() as db:
             db.add_all(entries)
             db.commit()
-            for entry in entries:
-                db.refresh(entry)
             return entries
 
     def recent_predictions(self, limit: int = 100) -> list[PredictionLog]:
