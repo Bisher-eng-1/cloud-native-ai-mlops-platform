@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.drift import DriftDetector, compute_psi
+from app.drift import DriftDetector, DriftWindow, compute_psi
 from app.inference import ONNXInferenceEngine
 
 
@@ -13,6 +13,7 @@ def test_onnx_engine_predicts_accurately():
     )
     normal = engine.predict("INFO service=auth-api region=eu-west-2 status=200 latency_ms=22 healthcheck passed")
     incident = engine.predict("FATAL service=cache-node region=eu-central-1 disk full write failure on volume")
+
     assert normal.label == "NORMAL"
     assert incident.label == "INCIDENT"
     assert abs((normal.normal_probability + normal.incident_probability) - 1.0) < 1e-4
@@ -45,10 +46,27 @@ def test_psi_is_near_zero_on_baseline_distribution():
     assert report.prediction_prob_psi < 0.25
 
 
-def test_psi_detects_severe_shift():
+def test_psi_detects_severe_shift_and_out_of_range_values():
     expected = [0.25, 0.25, 0.25, 0.25]
     edges = [0.0, 0.25, 0.5, 0.75, 1.01]
     shifted = [0.98] * 40
     psi = compute_psi(expected, shifted, edges)
     assert psi > 1.0
     assert compute_psi(expected, [], edges) == 0.0
+
+    extreme_out_of_range = [50000.0] * 20
+    assert compute_psi(expected, extreme_out_of_range, edges) > 1.0
+
+
+def test_drift_window_caps_at_maxlen_and_preserves_order():
+    win = DriftWindow(max_size=3)
+    assert win.snapshot() == ([], [], [])
+
+    win.seed([(10, 0.1, "NORMAL"), (20, 0.2, "NORMAL")])
+    win.append(30, 0.8, "INCIDENT")
+    win.extend([(40, 0.9, "INCIDENT")])
+
+    lengths, probs, labels = win.snapshot()
+    assert lengths == [20, 30, 40]
+    assert probs == [0.2, 0.8, 0.9]
+    assert labels == ["NORMAL", "INCIDENT", "INCIDENT"]

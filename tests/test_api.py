@@ -92,7 +92,6 @@ def test_batch_predict_and_validation(tmp_path: Path):
 
 def test_drift_and_prometheus_metrics(tmp_path: Path):
     with _make_test_client(tmp_path) as client:
-        # Submit 12 shifted high-incident/long requests to cross min_samples=10
         texts = [
             "CRITICAL service=worker-pool region=eu-central-1 out of memory oom killer terminated worker " + ("x" * 180)
             for _ in range(12)
@@ -114,6 +113,27 @@ def test_drift_and_prometheus_metrics(tmp_path: Path):
         assert "mlops_inference_latency_seconds" in text_body
         assert "mlops_input_length_psi" in text_body
         assert "mlops_drift_alert_active 1.0" in text_body
+
+
+def test_hot_path_drift_uses_memory_window_without_db_reads(tmp_path: Path):
+    with _make_test_client(tmp_path) as client:
+        def _fail_db_read(*_args, **_kwargs):
+            raise AssertionError("recent_predictions should not run on inference hot path")
+
+        client.app.state.db.recent_predictions = _fail_db_read
+
+        r1 = client.post("/predict", json={"text": "INFO service=auth-api status=200 healthcheck passed"})
+        assert r1.status_code == 200
+
+        r2 = client.post(
+            "/predict/batch",
+            json={"texts": ["INFO service=cache-node status=200 ok", "ERROR service=gateway status=503 timeout"]},
+        )
+        assert r2.status_code == 200
+
+        drift = client.get("/drift")
+        assert drift.status_code == 200
+        assert drift.json()["sample_count"] == 3
 
 
 def test_ready_failure_batch_whitespace_and_db_session(tmp_path: Path):
