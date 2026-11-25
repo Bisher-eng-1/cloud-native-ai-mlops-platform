@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     drift_window_size: int = Field(default=100, ge=10, le=10000)
     drift_psi_threshold: float = Field(default=0.25, gt=0.0, le=5.0)
     max_seq_len: int = Field(default=48, ge=8, le=512)
+    ort_intra_op_threads: int = Field(default=2, ge=1, le=32)
+    ort_inter_op_threads: int = Field(default=1, ge=1, le=16)
+    warmup_runs: int = Field(default=3, ge=0, le=20)
     port: int = Field(default=8000, ge=1, le=65535)
 
     @property

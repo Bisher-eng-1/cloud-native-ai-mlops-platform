@@ -122,7 +122,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(application: FastAPI):
         db = DatabaseManager(cfg.database_url)
         db.init_tables()
-        engine = ONNXInferenceEngine(cfg.model_file, cfg.tokenizer_file)
+        engine = ONNXInferenceEngine(
+            cfg.model_file,
+            cfg.tokenizer_file,
+            intra_op_threads=cfg.ort_intra_op_threads,
+            inter_op_threads=cfg.ort_inter_op_threads,
+            warmup_runs=cfg.warmup_runs,
+        )
         drift_detector = DriftDetector.from_file(
             cfg.baseline_stats_file,
             psi_threshold=cfg.drift_psi_threshold,

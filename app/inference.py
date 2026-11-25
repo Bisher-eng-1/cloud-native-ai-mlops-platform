@@ -10,6 +10,7 @@ import onnxruntime as ort
 from app.tokenizer import TextTokenizer
 
 LABELS = ("NORMAL", "INCIDENT")
+_WARMUP_TEXT = "INFO service=warmup region=eu-central-1 status=200 latency_ms=15 healthcheck passed errors=0"
 
 
 @dataclass(frozen=True)
@@ -30,15 +31,26 @@ def _softmax(logits: np.ndarray) -> np.ndarray:
 
 class ONNXInferenceEngine:
 
-    def __init__(self, model_path: Path, tokenizer_path: Path) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        tokenizer_path: Path,
+        intra_op_threads: int = 2,
+        inter_op_threads: int = 1,
+        warmup_runs: int = 3,
+    ) -> None:
         if not model_path.exists():
             raise FileNotFoundError(f"ONNX model not found at {model_path}")
         if not tokenizer_path.exists():
             raise FileNotFoundError(f"Tokenizer file not found at {tokenizer_path}")
 
+        self.intra_op_threads = max(1, intra_op_threads)
+        self.inter_op_threads = max(1, inter_op_threads)
+        self.warmup_runs_completed = 0
+
         sess_options = ort.SessionOptions()
-        sess_options.intra_op_num_threads = 2
-        sess_options.inter_op_num_threads = 1
+        sess_options.intra_op_num_threads = self.intra_op_threads
+        sess_options.inter_op_num_threads = self.inter_op_threads
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
         self.model_path = model_path
@@ -48,6 +60,20 @@ class ONNXInferenceEngine:
             sess_options=sess_options,
             providers=["CPUExecutionProvider"],
         )
+        self.warmup_ms = self.warmup(warmup_runs)
+
+    def warmup(self, runs: int = 3) -> float:
+        if runs <= 0:
+            return 0.0
+        start = time.perf_counter()
+        input_ids, attention_mask, _ = self.tokenizer.encode_batch([_WARMUP_TEXT])
+        for _ in range(runs):
+            self.session.run(
+                ["logits"],
+                {"input_ids": input_ids, "attention_mask": attention_mask},
+            )
+        self.warmup_runs_completed += runs
+        return round((time.perf_counter() - start) * 1000.0, 3)
 
     def predict(self, text: str) -> InferenceResult:
         return self.predict_batch([text])[0]
