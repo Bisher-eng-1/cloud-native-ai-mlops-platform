@@ -1,6 +1,6 @@
 {
   "environment": {
-    "python": "3.11.2",
+    "python": "3.11.9",
     "torch": "2.5.1+cpu",
     "onnxruntime": "1.20.1",
     "mlflow": "2.19.0"
@@ -8,62 +8,62 @@
   "dataset": {
     "train_records": 720,
     "test_records": 240,
-    "vocab_size": 419
+    "vocab_size": 422
   },
   "parity": {
-    "fp32_max_abs_diff": 1.7e-06,
-    "int8_max_abs_diff": 0.2414675
+    "fp32_max_abs_diff": 1.9e-06,
+    "int8_max_abs_diff": 0.4797897
   },
   "model_size_kb": {
-    "onnx_fp32": 451.35,
-    "onnx_int8": 171.22,
-    "compression_ratio": 2.64
+    "onnx_fp32": 452.1,
+    "onnx_int8": 172.16,
+    "compression_ratio": 2.63
   },
   "metrics": {
     "pytorch_fp32": {
-      "accuracy": 1.0,
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0,
-      "tp": 120,
-      "tn": 120,
-      "fp": 0,
-      "fn": 0
+      "accuracy": 0.9625,
+      "precision": 0.9744,
+      "recall": 0.95,
+      "f1": 0.962,
+      "tp": 114,
+      "tn": 117,
+      "fp": 3,
+      "fn": 6
     },
     "onnx_fp32": {
-      "accuracy": 1.0,
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0,
-      "tp": 120,
-      "tn": 120,
-      "fp": 0,
-      "fn": 0
+      "accuracy": 0.9625,
+      "precision": 0.9744,
+      "recall": 0.95,
+      "f1": 0.962,
+      "tp": 114,
+      "tn": 117,
+      "fp": 3,
+      "fn": 6
     },
     "onnx_int8": {
-      "accuracy": 1.0,
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0,
-      "tp": 120,
-      "tn": 120,
-      "fp": 0,
-      "fn": 0
+      "accuracy": 0.9625,
+      "precision": 0.9744,
+      "recall": 0.95,
+      "f1": 0.962,
+      "tp": 114,
+      "tn": 117,
+      "fp": 3,
+      "fn": 6
     }
   },
   "latency_benchmark": {
     "pytorch_fp32": {
-      "mean_ms": 0.8461,
-      "p95_ms": 1.0874
+      "mean_ms": 2.0115,
+      "p95_ms": 2.618
     },
     "onnx_fp32": {
-      "mean_ms": 0.429,
-      "p95_ms": 0.5126
+      "mean_ms": 0.9978,
+      "p95_ms": 1.6908
     },
     "onnx_int8": {
-      "mean_ms": 0.3612,
-      "p95_ms": 0.4476
+      "mean_ms": 0.9279,
+      "p95_ms": 1.1958
     },
-    "onnx_int8_speedup_vs_pytorch": 2.34
+    "onnx_int8_speedup_vs_pytorch": 2.17
   }
 }

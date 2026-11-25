@@ -1,6 +1,6 @@
 {
   "sample_size": 720,
-  "mean_text_length": 84.42,
+  "mean_text_length": 90.51,
   "anomaly_rate": 0.5,
   "length_bin_edges": [
     0.0,
@@ -12,9 +12,9 @@
   ],
   "length_bin_probs": [
     0.0001,
-    0.2375,
-    0.761111,
-    0.001389,
+    0.030556,
+    0.916667,
+    0.052778,
     0.0001
   ],
   "prob_bin_edges": [
