@@ -72,13 +72,16 @@ jobs:
         run: |
           kind load docker-image cloud-native-ai-mlops:local --name mlops-ci
           kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/postgres.yaml
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
           kubectl apply -f k8s/hpa.yaml
-          kubectl -n mlops-platform rollout status deployment/mlops-inference-api --timeout=90s
+          kubectl -n mlops-platform rollout status deployment/mlops-postgres --timeout=120s
+          kubectl -n mlops-platform rollout status deployment/mlops-inference-api --timeout=120s
           kubectl -n mlops-platform get pods,svc,hpa
 
-      - name: Smoke-test FastAPI + ONNX + Metrics inside Kubernetes
+      - name: Smoke-test FastAPI + ONNX + PostgreSQL + Metrics inside Kubernetes
         run: |
           kubectl -n mlops-platform port-forward svc/mlops-inference-service 8000:80 &
           PF_PID=$!
@@ -89,16 +92,7 @@ jobs:
             fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:8000/health
-          curl -fsS http://127.0.0.1:8000/ready
-          curl -fsS -X POST http://127.0.0.1:8000/predict \
-            -H "Content-Type: application/json" \
-            -d '{"text":"CRITICAL service=worker-pool region=eu-central-1 out of memory oom killer"}'
-          curl -fsS -X POST http://127.0.0.1:8000/predict/batch \
-            -H "Content-Type: application/json" \
-            -d '{"texts":["INFO service=auth-api region=eu-central-1 status=200 healthcheck passed","ERROR service=payment-gateway region=us-east-1 status=503 upstream timeout"]}'
-          curl -fsS http://127.0.0.1:8000/drift
-          curl -fsS http://127.0.0.1:8000/metrics | grep -q mlops_inference_requests_total
+          python3 scripts/smoke_demo.py --base-url http://127.0.0.1:8000 --expect-backend postgresql
 
       - name: Log in and push image to GHCR (on main push)
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')

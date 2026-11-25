@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlops-inference-config
+  namespace: mlops-platform
+  labels:
+    app: mlops-inference-api
+data:
+  MODEL_PATH: "artifacts/model_int8.onnx"
+  TOKENIZER_PATH: "artifacts/tokenizer.json"
+  BASELINE_STATS_PATH: "artifacts/baseline_stats.json"
+  DRIFT_WINDOW_SIZE: "100"
+  DRIFT_PSI_THRESHOLD: "0.25"
+  ORT_INTRA_OP_THREADS: "2"
+  ORT_INTER_OP_THREADS: "1"
+  WARMUP_RUNS: "3"

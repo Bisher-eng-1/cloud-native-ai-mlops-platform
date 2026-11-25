@@ -28,6 +28,36 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
+      initContainers:
+        - name: wait-for-postgres
+          image: cloud-native-ai-mlops:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-postgres-secret
+                  key: DATABASE_URL
+          command:
+            - python
+            - -c
+            - |
+              import os
+              import time
+              from app.db import DatabaseManager
+
+              db = DatabaseManager(os.environ["DATABASE_URL"])
+              for _ in range(30):
+                  try:
+                      if db.ping():
+                          db.init_tables()
+                          print("PostgreSQL ready and schema initialized")
+                          break
+                  except Exception as exc:
+                      print("Waiting for PostgreSQL:", exc)
+                  time.sleep(2)
+              else:
+                  raise SystemExit("PostgreSQL did not become ready in time")
       containers:
         - name: api
           image: cloud-native-ai-mlops:local
@@ -35,15 +65,15 @@ spec:
           ports:
             - containerPort: 8000
               name: http
+          envFrom:
+            - configMapRef:
+                name: mlops-inference-config
           env:
-            - name: MODEL_PATH
-              value: "artifacts/model_int8.onnx"
-            - name: TOKENIZER_PATH
-              value: "artifacts/tokenizer.json"
-            - name: BASELINE_STATS_PATH
-              value: "artifacts/baseline_stats.json"
             - name: DATABASE_URL
-              value: "sqlite:////tmp/predictions.db"
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-postgres-secret
+                  key: DATABASE_URL
           resources:
             requests:
               cpu: "100m"

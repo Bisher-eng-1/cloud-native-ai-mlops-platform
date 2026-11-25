@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mlops-postgres-secret
+  namespace: mlops-platform
+type: Opaque
+stringData:
+  # Local/CI defaults only; inject external Secret Manager or CSI values in production.
+  POSTGRES_USER: mlops
+  POSTGRES_PASSWORD: mlops_dev_password
+  POSTGRES_DB: mlops_predictions
+  DATABASE_URL: postgresql+psycopg://mlops:mlops_dev_password@mlops-postgres:5432/mlops_predictions
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlops-postgres
+  namespace: mlops-platform
+  labels:
+    app: mlops-postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mlops-postgres
+  template:
+    metadata:
+      labels:
+        app: mlops-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          envFrom:
+            - secretRef:
+                name: mlops-postgres-secret
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "mlops", "-d", "mlops_predictions"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "mlops", "-d", "mlops_predictions"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        # Ephemeral volume for kind/CI smoke runs; swap for a PersistentVolumeClaim in production.
+        - name: postgres-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlops-postgres
+  namespace: mlops-platform
+  labels:
+    app: mlops-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: mlops-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
