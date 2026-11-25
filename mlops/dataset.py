@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 SERVICES = ("auth-api", "payment-gateway", "worker-pool", "cache-node", "ingress-proxy", "scheduler")
 REGIONS = ("eu-central-1", "eu-west-2", "us-east-1")
@@ -74,11 +76,11 @@ def _render_samples(templates: tuple[str, ...], label: int, count: int, rng: ran
     return samples
 
 
-def build_disjoint_dataset(
+def build_evaluation_splits(
     seed: int = 42,
     train_per_class: int = 360,
     test_per_class: int = 120,
-) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+) -> tuple[list[tuple[str, int]], list[tuple[str, int]], list[tuple[str, int]]]:
     rng = random.Random(seed)
     train_data = (
         _render_samples(TRAIN_NORMAL_TEMPLATES, 0, train_per_class, rng)
@@ -86,12 +88,72 @@ def build_disjoint_dataset(
     )
     challenge_count = max(0, min(12, test_per_class // 10))
     standard_count = test_per_class - challenge_count
-    test_data = (
+    standard_test_data = (
         _render_samples(TEST_NORMAL_TEMPLATES, 0, standard_count, rng)
-        + _render_samples(CHALLENGE_NORMAL_TEMPLATES, 0, challenge_count, rng)
         + _render_samples(TEST_INCIDENT_TEMPLATES, 1, standard_count, rng)
+    )
+    challenge_test_data = (
+        _render_samples(CHALLENGE_NORMAL_TEMPLATES, 0, challenge_count, rng)
         + _render_samples(CHALLENGE_INCIDENT_TEMPLATES, 1, challenge_count, rng)
     )
     rng.shuffle(train_data)
+    rng.shuffle(standard_test_data)
+    rng.shuffle(challenge_test_data)
+    return train_data, standard_test_data, challenge_test_data
+
+
+def build_disjoint_dataset(
+    seed: int = 42,
+    train_per_class: int = 360,
+    test_per_class: int = 120,
+) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+    train_data, standard_test_data, challenge_test_data = build_evaluation_splits(
+        seed=seed,
+        train_per_class=train_per_class,
+        test_per_class=test_per_class,
+    )
+    rng = random.Random(seed + 1)
+    test_data = standard_test_data + challenge_test_data
     rng.shuffle(test_data)
+    return train_data, test_data
+
+
+def load_jsonl_dataset(
+    path: Path,
+    seed: int = 42,
+    test_ratio: float = 0.2,
+) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+    if not path.exists():
+        raise FileNotFoundError(f"JSONL dataset not found: {path}")
+
+    train_data: list[tuple[str, int]] = []
+    test_data: list[tuple[str, int]] = []
+    unassigned: list[tuple[str, int]] = []
+
+    for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        row = json.loads(stripped)
+        text = str(row.get("text", "")).strip()
+        label = int(row["label"])
+        if not text or label not in (0, 1):
+            raise ValueError(f"Invalid record at line {line_no}: expected non-empty text and label 0 or 1")
+        split = row.get("split")
+        if split == "train":
+            train_data.append((text, label))
+        elif split == "test":
+            test_data.append((text, label))
+        else:
+            unassigned.append((text, label))
+
+    if unassigned:
+        random.Random(seed).shuffle(unassigned)
+        n_test = max(1, int(round(len(unassigned) * test_ratio))) if len(unassigned) >= 2 else 0
+        test_data.extend(unassigned[:n_test])
+        train_data.extend(unassigned[n_test:])
+
+    if not train_data or not test_data:
+        raise ValueError("JSONL dataset must provide at least one train record and one test record")
+
     return train_data, test_data

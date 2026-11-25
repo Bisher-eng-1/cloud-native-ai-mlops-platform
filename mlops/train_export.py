@@ -4,11 +4,13 @@ import argparse
 import json
 import math
 import platform
+import random
 import time
 from pathlib import Path
 
 import mlflow
 import numpy as np
+import onnx  # noqa: F401 - preload onnx before torch to avoid Windows DLL init conflicts
 import onnxruntime as ort
 import torch
 import torch.nn as nn
@@ -18,7 +20,7 @@ from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precisio
 from torch.utils.data import DataLoader, TensorDataset
 
 from app.tokenizer import TextTokenizer
-from mlops.dataset import build_disjoint_dataset
+from mlops.dataset import build_evaluation_splits, load_jsonl_dataset
 from mlops.model import LightweightLogTransformer
 
 
@@ -116,16 +118,30 @@ def run_pipeline(
     mlruns_dir: Path = Path("mlruns"),
     seed: int = 42,
     epochs: int = 10,
+    dataset_jsonl: Path | None = None,
 ) -> dict:
     torch.manual_seed(seed)
     np.random.seed(seed)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-    train_data, test_data = build_disjoint_dataset(seed=seed)
+    if dataset_jsonl is not None:
+        train_data, standard_test_data = load_jsonl_dataset(dataset_jsonl, seed=seed)
+        challenge_test_data: list[tuple[str, int]] = []
+        dataset_source = "external_jsonl"
+    else:
+        train_data, standard_test_data, challenge_test_data = build_evaluation_splits(seed=seed)
+        dataset_source = "synthetic_disjoint"
+
+    eval_rows = [(t, y, False) for t, y in standard_test_data] + [
+        (t, y, True) for t, y in challenge_test_data
+    ]
+    random.Random(seed).shuffle(eval_rows)
+
     train_texts = [t for t, _ in train_data]
     train_labels = [y for _, y in train_data]
-    test_texts = [t for t, _ in test_data]
-    test_labels = [y for _, y in test_data]
+    test_texts = [t for t, _, _ in eval_rows]
+    test_labels = [y for _, y, _ in eval_rows]
+    challenge_flags = [is_challenge for _, _, is_challenge in eval_rows]
 
     tokenizer = TextTokenizer.fit(train_texts, max_vocab_size=2048, max_seq_len=48)
     tokenizer_path = artifacts_dir / "tokenizer.json"
@@ -202,7 +218,13 @@ def run_pipeline(
     max_abs_diff_fp32 = float(np.max(np.abs(pt_test_logits - ort_fp32_logits)))
     max_abs_diff_int8 = float(np.max(np.abs(pt_test_logits - ort_int8_logits)))
     ort_fp32_metrics = _compute_metrics(test_labels, np.argmax(ort_fp32_logits, axis=1).tolist())
-    ort_int8_metrics = _compute_metrics(test_labels, np.argmax(ort_int8_logits, axis=1).tolist())
+    ort_int8_preds = np.argmax(ort_int8_logits, axis=1).tolist()
+    ort_int8_metrics = _compute_metrics(test_labels, ort_int8_preds)
+
+    std_pairs = [(y, p) for y, p, is_ch in zip(test_labels, ort_int8_preds, challenge_flags, strict=True) if not is_ch]
+    chl_pairs = [(y, p) for y, p, is_ch in zip(test_labels, ort_int8_preds, challenge_flags, strict=True) if is_ch]
+    std_metrics = _compute_metrics([y for y, _ in std_pairs], [p for _, p in std_pairs])
+    chl_metrics = _compute_metrics([y for y, _ in chl_pairs], [p for _, p in chl_pairs]) if chl_pairs else None
 
     fp32_kb = round(fp32_onnx_path.stat().st_size / 1024.0, 2)
     int8_kb = round(int8_onnx_path.stat().st_size / 1024.0, 2)
@@ -220,8 +242,11 @@ def run_pipeline(
             "mlflow": mlflow.__version__,
         },
         "dataset": {
+            "source": dataset_source,
             "train_records": len(train_texts),
             "test_records": len(test_texts),
+            "standard_records": len(std_pairs),
+            "challenge_records": len(chl_pairs),
             "vocab_size": len(tokenizer.vocab),
         },
         "parity": {
@@ -237,6 +262,8 @@ def run_pipeline(
             "pytorch_fp32": pt_metrics,
             "onnx_fp32": ort_fp32_metrics,
             "onnx_int8": ort_int8_metrics,
+            "onnx_int8_standard": std_metrics,
+            "onnx_int8_challenge": chl_metrics,
         },
         "latency_benchmark": {
             "pytorch_fp32": pt_bench,
@@ -255,6 +282,7 @@ def run_pipeline(
             {
                 "seed": seed,
                 "epochs": epochs,
+                "dataset_source": dataset_source,
                 "vocab_size": len(tokenizer.vocab),
                 "max_seq_len": tokenizer.max_seq_len,
                 "embed_dim": 64,
@@ -263,22 +291,24 @@ def run_pipeline(
                 "quantization": "dynamic_int8",
             }
         )
-        mlflow.log_metrics(
-            {
-                "pytorch_accuracy": pt_metrics["accuracy"],
-                "pytorch_f1": pt_metrics["f1"],
-                "onnx_fp32_accuracy": ort_fp32_metrics["accuracy"],
-                "onnx_int8_accuracy": ort_int8_metrics["accuracy"],
-                "onnx_int8_f1": ort_int8_metrics["f1"],
-                "fp32_max_abs_diff": max_abs_diff_fp32 if math.isfinite(max_abs_diff_fp32) else 0.0,
-                "pytorch_mean_ms": pt_bench["mean_ms"],
-                "onnx_fp32_mean_ms": ort_fp32_bench["mean_ms"],
-                "onnx_int8_mean_ms": ort_int8_bench["mean_ms"],
-                "onnx_int8_speedup": speedup_int8,
-                "onnx_fp32_kb": fp32_kb,
-                "onnx_int8_kb": int8_kb,
-            }
-        )
+        mlflow_metrics = {
+            "pytorch_accuracy": pt_metrics["accuracy"],
+            "pytorch_f1": pt_metrics["f1"],
+            "onnx_fp32_accuracy": ort_fp32_metrics["accuracy"],
+            "onnx_int8_accuracy": ort_int8_metrics["accuracy"],
+            "onnx_int8_f1": ort_int8_metrics["f1"],
+            "onnx_int8_standard_f1": std_metrics["f1"],
+            "fp32_max_abs_diff": max_abs_diff_fp32 if math.isfinite(max_abs_diff_fp32) else 0.0,
+            "pytorch_mean_ms": pt_bench["mean_ms"],
+            "onnx_fp32_mean_ms": ort_fp32_bench["mean_ms"],
+            "onnx_int8_mean_ms": ort_int8_bench["mean_ms"],
+            "onnx_int8_speedup": speedup_int8,
+            "onnx_fp32_kb": fp32_kb,
+            "onnx_int8_kb": int8_kb,
+        }
+        if chl_metrics is not None:
+            mlflow_metrics["onnx_int8_challenge_f1"] = chl_metrics["f1"]
+        mlflow.log_metrics(mlflow_metrics)
         mlflow.log_artifact(str(report_path))
         mlflow.log_artifact(str(baseline_path))
         mlflow.log_artifact(str(int8_onnx_path))
@@ -291,8 +321,14 @@ def main() -> None:
     parser.add_argument("--artifacts-dir", type=Path, default=Path("artifacts"))
     parser.add_argument("--mlruns-dir", type=Path, default=Path("mlruns"))
     parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--dataset-jsonl", type=Path, default=None, help="Optional JSONL file with text, label, and optional split.")
     args = parser.parse_args()
-    report = run_pipeline(artifacts_dir=args.artifacts_dir, mlruns_dir=args.mlruns_dir, epochs=args.epochs)
+    report = run_pipeline(
+        artifacts_dir=args.artifacts_dir,
+        mlruns_dir=args.mlruns_dir,
+        epochs=args.epochs,
+        dataset_jsonl=args.dataset_jsonl,
+    )
     print(json.dumps(report, indent=2))
 
 
